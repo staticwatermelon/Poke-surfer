@@ -80,6 +80,21 @@ function drawBackground() {
   ctx.setLineDash([]);
 }
 
+
+function drawLaneGuides() {
+  ctx.strokeStyle = "rgba(0, 229, 255, 0.35)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([10, 10]);
+
+  for (const centerX of laneX) {
+    ctx.beginPath();
+    ctx.moveTo(centerX, 0);
+    ctx.lineTo(centerX, canvas.height);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+}
 function drawPlayer() {
   const x = player.x - player.width / 2;
   ctx.fillStyle = player.color;
@@ -153,7 +168,7 @@ function updateEntities(dt) {
     height: player.height
   };
 
-  obstacles = obstacles.filter((obstacle, i) => {
+  obstacles = obstacles.filter((obstacle) => {
     obstacle.y += distanceSpeed;
 
     const ox = laneX[obstacle.lane] - obstacle.width / 2;
@@ -256,6 +271,7 @@ function gameLoop(timestamp) {
   lastTime = timestamp;
 
   drawBackground();
+  drawLaneGuides();
 
   if (gameState === STATE.RUNNING) {
     updateEntities(dt);
