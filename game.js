@@ -15,9 +15,14 @@ const player = {
   x: 0,
   targetX: 0,
   y: 0,
+  baseY: 0,
   width: 0,
   height: 0,
-  color: "#00e5ff"
+  color: "#00e5ff",
+  isJumping: false,
+  jumpY: 0,
+  velocityY: 0,
+  runFrame: 0
 };
 
 let obstacles = [];
@@ -31,6 +36,7 @@ let coinSpawnTimer = 0;
 let lastTime = 0;
 let visualTime = 0;
 let roadScroll = 0;
+const DEBUG_LANE_GUIDES = false;
 
 const MIN_OBSTACLE_GAP = 260;
 const BASE_OBSTACLE_SPAWN_MS = 850;
@@ -73,7 +79,8 @@ function resizeCanvas() {
 
   player.width = Math.min(56, laneWidth * 0.35);
   player.height = player.width;
-  player.y = canvas.height - player.height - 28;
+  player.baseY = canvas.height - player.height - 28;
+  player.y = player.baseY;
   player.x = laneX[player.currentLane];
   player.targetX = laneX[player.targetLane];
 }
@@ -83,6 +90,10 @@ function resetGame() {
   player.targetLane = 1;
   player.x = laneX[player.currentLane];
   player.targetX = laneX[player.targetLane];
+  player.isJumping = false;
+  player.jumpY = 0;
+  player.velocityY = 0;
+  player.runFrame = 0;
   obstacles = [];
   coins = [];
   score = 0;
@@ -91,6 +102,20 @@ function resetGame() {
   obstacleSpawnTimer = 0;
   coinSpawnTimer = 0;
   gameState = STATE.RUNNING;
+}
+
+function getPerspectivePosition(lane, progress) {
+  const horizonY = canvas.height * 0.22;
+  const groundY = canvas.height * 0.9;
+  const t = Math.max(0, Math.min(1, progress));
+  const laneSpacingTop = canvas.width * 0.06;
+  const laneSpacingBottom = canvas.width * 0.22;
+  const y = horizonY + (groundY - horizonY) * t;
+  const laneSpacing = laneSpacingTop + (laneSpacingBottom - laneSpacingTop) * t;
+  const laneOffset = lane - 1;
+  const x = canvas.width / 2 + laneOffset * laneSpacing;
+  const scale = 0.25 + 0.9 * t;
+  return { x, y, scale };
 }
 
 function getRoadEdges(y) {
@@ -189,9 +214,9 @@ function drawShadow(x, y, scale, widthFactor = 1) {
 }
 
 function drawPlayer() {
-  const bounce = Math.sin(visualTime * 0.013) * 6;
-  const y = player.y + bounce;
-  drawShadow(player.x, player.y + player.height * 0.92, 1, 0.9);
+  const runBounce = player.isJumping ? 0 : Math.sin(visualTime * 0.02) * 4;
+  const y = player.baseY - player.jumpY + runBounce;
+  drawShadow(player.x, player.baseY + player.height * 0.92, 1, 0.9);
 
   const p = sprites.player;
   if (p?.loaded) {
@@ -201,6 +226,7 @@ function drawPlayer() {
 
   // Fallback runner
   const cx = player.x;
+  const stride = Math.sin(player.runFrame) * player.width * 0.14;
   const bodyW = player.width * 0.34;
   const bodyH = player.height * 0.42;
   ctx.fillStyle = "#00e5ff";
@@ -212,10 +238,14 @@ function drawPlayer() {
   ctx.strokeStyle = "#00e5ff";
   ctx.lineWidth = 5;
   ctx.beginPath();
+  ctx.moveTo(cx - bodyW * 0.5, y + player.height * 0.42);
+  ctx.lineTo(cx - bodyW * 0.95 - stride, y + player.height * 0.66);
+  ctx.moveTo(cx + bodyW * 0.5, y + player.height * 0.42);
+  ctx.lineTo(cx + bodyW * 0.95 + stride, y + player.height * 0.66);
   ctx.moveTo(cx - 4, y + player.height * 0.55);
-  ctx.lineTo(cx - player.width * 0.17, y + player.height * 0.9);
+  ctx.lineTo(cx - player.width * 0.17 - stride, y + player.height * 0.9);
   ctx.moveTo(cx + 4, y + player.height * 0.55);
-  ctx.lineTo(cx + player.width * 0.17, y + player.height * 0.9);
+  ctx.lineTo(cx + player.width * 0.17 + stride, y + player.height * 0.9);
   ctx.stroke();
 }
 
@@ -226,7 +256,8 @@ function spawnObstacle() {
 
   obstacles.push({
     lane,
-    y: -height,
+    progress: 0,
+    type: Math.random() < 0.7 ? "low" : "high",
     width,
     height
   });
@@ -236,7 +267,7 @@ function spawnCoin() {
   const lane = Math.floor(Math.random() * 3);
   coins.push({
     lane,
-    y: -20,
+    progress: 0,
     radius: Math.max(10, player.width * 0.2)
   });
 }
@@ -281,43 +312,66 @@ function updateEntities(dt) {
     player.currentLane = player.targetLane;
   }
 
+  if (gameState === STATE.RUNNING) {
+    player.runFrame += dt * 0.02;
+  }
+
+  const GRAVITY = 0.0016;
+  if (player.isJumping) {
+    player.velocityY -= GRAVITY * dt;
+    player.jumpY += player.velocityY * dt;
+    if (player.jumpY <= 0) {
+      player.jumpY = 0;
+      player.velocityY = 0;
+      player.isJumping = false;
+    }
+  }
+
   const playerRect = {
     x: player.x - player.width / 2,
-    y: player.y,
+    y: player.baseY - player.jumpY,
     width: player.width,
     height: player.height
   };
 
   obstacles = obstacles.filter((obstacle) => {
-    obstacle.y += distanceSpeed;
+    obstacle.progress += distanceSpeed * dt * 0.00018;
+    const p = getPerspectivePosition(obstacle.lane, obstacle.progress);
+    const w = obstacle.width * p.scale;
+    const h = obstacle.height * p.scale;
+    const oRect = { x: p.x - w / 2, y: p.y - h * 0.92, width: w, height: h };
 
-    const ox = laneX[obstacle.lane] - obstacle.width / 2;
-    const oRect = { x: ox, y: obstacle.y, width: obstacle.width, height: obstacle.height };
-
-    if (rectsOverlap(playerRect, oRect)) {
-      gameState = STATE.GAME_OVER;
+    if (obstacle.progress > 0.78 && rectsOverlap(playerRect, oRect)) {
+      const canClearByJump = obstacle.type === "low" && player.jumpY > player.height * 0.36;
+      if (!canClearByJump) {
+        gameState = STATE.GAME_OVER;
+      }
       return true;
     }
 
-    return obstacle.y < canvas.height + 80;
+    return obstacle.progress < 1.05;
   });
 
   coins = coins.filter((coin) => {
-    coin.y += distanceSpeed * 0.95;
-    const cx = laneX[coin.lane];
+    coin.progress += distanceSpeed * dt * 0.0002;
+    const p = getPerspectivePosition(coin.lane, coin.progress);
+    const cx = p.x;
+    const cy = p.y;
+    const r = coin.radius * (p.scale * 0.88);
 
     const touches =
-      cx + coin.radius > playerRect.x &&
-      cx - coin.radius < playerRect.x + playerRect.width &&
-      coin.y + coin.radius > playerRect.y &&
-      coin.y - coin.radius < playerRect.y + playerRect.height;
+      coin.progress > 0.76 &&
+      cx + r > playerRect.x &&
+      cx - r < playerRect.x + playerRect.width &&
+      cy + r > playerRect.y &&
+      cy - r < playerRect.y + playerRect.height;
 
     if (touches) {
       score += 10;
       return false;
     }
 
-    return coin.y < canvas.height + 30;
+    return coin.progress < 1.05;
   });
 
   score += dt * 0.01;
@@ -325,12 +379,12 @@ function updateEntities(dt) {
 
 function drawObstacles() {
   for (const obstacle of obstacles) {
-    const scale = getPerspectiveScale(obstacle.y + obstacle.height);
-    const w = obstacle.width * scale;
-    const h = obstacle.height * scale;
-    const x = laneX[obstacle.lane] - w / 2;
-    const y = obstacle.y - h * 0.08;
-    drawShadow(laneX[obstacle.lane], y + h * 0.98, scale, 1.1);
+    const p = getPerspectivePosition(obstacle.lane, obstacle.progress);
+    const w = obstacle.width * p.scale;
+    const h = obstacle.height * p.scale;
+    const x = p.x - w / 2;
+    const y = p.y - h * 0.92;
+    drawShadow(p.x, y + h * 0.98, p.scale, 1.1);
 
     if (sprites.train?.loaded) {
       ctx.drawImage(sprites.train.img, x, y, w, h);
@@ -353,10 +407,11 @@ function drawObstacles() {
 
 function drawCoins() {
   for (const coin of coins) {
-    const scale = getPerspectiveScale(coin.y) * 0.88;
+    const p = getPerspectivePosition(coin.lane, coin.progress);
+    const scale = p.scale * 0.88;
     const r = coin.radius * scale;
-    const x = laneX[coin.lane];
-    const y = coin.y;
+    const x = p.x;
+    const y = p.y;
 
     drawShadow(x, y + r * 1.4, scale, 0.55);
 
@@ -378,6 +433,21 @@ function drawCoins() {
     ctx.lineWidth = Math.max(1.5, r * 0.14);
     ctx.beginPath();
     ctx.arc(x, y, r * 0.55, Math.PI * 1.2, Math.PI * 1.75);
+    ctx.stroke();
+  }
+}
+
+function drawDebugLaneGuides() {
+  if (!DEBUG_LANE_GUIDES) return;
+  ctx.strokeStyle = "rgba(255, 70, 70, 0.7)";
+  ctx.lineWidth = 2;
+  for (let lane = 0; lane < 3; lane += 1) {
+    ctx.beginPath();
+    for (let i = 0; i <= 24; i += 1) {
+      const p = getPerspectivePosition(lane, i / 24);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    }
     ctx.stroke();
   }
 }
@@ -433,6 +503,7 @@ function gameLoop(timestamp) {
 
   drawBackground();
   drawRoad();
+  drawDebugLaneGuides();
 
   if (gameState === STATE.RUNNING) {
     updateEntities(dt);
@@ -455,6 +526,12 @@ function moveLane(direction) {
   player.targetX = laneX[player.targetLane];
 }
 
+function startJump() {
+  if (gameState !== STATE.RUNNING || player.isJumping) return;
+  player.isJumping = true;
+  player.velocityY = 0.045;
+}
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") {
     moveLane(-1);
@@ -464,6 +541,10 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key.toLowerCase() === "r" && gameState === STATE.GAME_OVER) {
     resetGame();
+  }
+  if (e.code === "Space") {
+    e.preventDefault();
+    startJump();
   }
 });
 
@@ -494,6 +575,8 @@ canvas.addEventListener("touchend", (e) => {
 
   if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 24) {
     moveLane(dx > 0 ? 1 : -1);
+  } else if (Math.abs(dy) > Math.abs(dx) && dy < -24) {
+    startJump();
   }
 }, { passive: true });
 
