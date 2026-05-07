@@ -10,7 +10,10 @@ let laneX = [];
 let laneWidth = 0;
 
 const player = {
-  lane: 1,
+  currentLane: 1,
+  targetLane: 1,
+  x: 0,
+  targetX: 0,
   y: 0,
   width: 0,
   height: 0,
@@ -41,10 +44,15 @@ function resizeCanvas() {
   player.width = Math.min(56, laneWidth * 0.35);
   player.height = player.width;
   player.y = canvas.height - player.height - 28;
+  player.x = laneX[player.currentLane];
+  player.targetX = laneX[player.targetLane];
 }
 
 function resetGame() {
-  player.lane = 1;
+  player.currentLane = 1;
+  player.targetLane = 1;
+  player.x = laneX[player.currentLane];
+  player.targetX = laneX[player.targetLane];
   obstacles = [];
   coins = [];
   score = 0;
@@ -73,7 +81,7 @@ function drawBackground() {
 }
 
 function drawPlayer() {
-  const x = laneX[player.lane] - player.width / 2;
+  const x = player.x - player.width / 2;
   ctx.fillStyle = player.color;
   ctx.fillRect(x, player.y, player.width, player.height);
 }
@@ -87,8 +95,7 @@ function spawnObstacle() {
     lane,
     y: -height,
     width,
-    height,
-    vx: (Math.random() - 0.5) * 0.6
+    height
   });
 }
 
@@ -131,8 +138,16 @@ function updateEntities(dt) {
     distanceSpeed += 0.25;
   }
 
+  const laneMoveLerp = 1 - Math.exp(-0.02 * dt);
+  player.x += (player.targetX - player.x) * laneMoveLerp;
+  const snapDistance = 0.5;
+  if (Math.abs(player.x - player.targetX) <= snapDistance) {
+    player.x = player.targetX;
+    player.currentLane = player.targetLane;
+  }
+
   const playerRect = {
-    x: laneX[player.lane] - player.width / 2,
+    x: player.x - player.width / 2,
     y: player.y,
     width: player.width,
     height: player.height
@@ -140,9 +155,8 @@ function updateEntities(dt) {
 
   obstacles = obstacles.filter((obstacle, i) => {
     obstacle.y += distanceSpeed;
-    obstacle.lane = Math.min(2, Math.max(0, obstacle.lane + obstacle.vx * dt * 0.002));
 
-    const ox = laneWidth * (obstacle.lane + 0.5) - obstacle.width / 2;
+    const ox = laneX[obstacle.lane] - obstacle.width / 2;
     const oRect = { x: ox, y: obstacle.y, width: obstacle.width, height: obstacle.height };
 
     if (rectsOverlap(playerRect, oRect)) {
@@ -177,7 +191,7 @@ function updateEntities(dt) {
 function drawObstacles() {
   ctx.fillStyle = "#ff6b6b";
   for (const obstacle of obstacles) {
-    const x = laneWidth * (obstacle.lane + 0.5) - obstacle.width / 2;
+    const x = laneX[obstacle.lane] - obstacle.width / 2;
     ctx.fillRect(x, obstacle.y, obstacle.width, obstacle.height);
   }
 }
@@ -259,7 +273,9 @@ function moveLane(direction) {
   if (gameState !== STATE.RUNNING) {
     return;
   }
-  player.lane = Math.max(0, Math.min(2, player.lane + direction));
+  const nextLane = Math.max(0, Math.min(2, player.targetLane + direction));
+  player.targetLane = nextLane;
+  player.targetX = laneX[player.targetLane];
 }
 
 document.addEventListener("keydown", (e) => {
